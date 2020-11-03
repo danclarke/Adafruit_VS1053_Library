@@ -288,6 +288,11 @@ Adafruit_VS1053::Adafruit_VS1053(int8_t mosi, int8_t miso, int8_t clk,
   _dcs = dcs;
   _dreq = dreq;
 
+#ifdef ESP32
+
+  useHardwareSPI = true;
+
+#else // Software SPI
   useHardwareSPI = false;
 
   clkportreg = portOutputRegister(digitalPinToPort(_clk));
@@ -296,6 +301,7 @@ Adafruit_VS1053::Adafruit_VS1053(int8_t mosi, int8_t miso, int8_t clk,
   misopin = digitalPinToBitMask(_miso);
   mosiportreg = portOutputRegister(digitalPinToPort(_mosi));
   mosipin = digitalPinToBitMask(_mosi);
+#endif
 }
 
 
@@ -478,7 +484,14 @@ uint8_t Adafruit_VS1053::begin(void) {
     pinMode(_clk, OUTPUT);
     pinMode(_miso, INPUT);
   } else {
+#ifdef ESP32
+  if (_clk) // If clk is not 0, we're defining the SPI pins
+    SPI.begin(_clk, _miso, _mosi, _cs);
+  else 
     SPI.begin();
+#else
+    SPI.begin();
+#endif
     SPI.setDataMode(SPI_MODE0);
     SPI.setBitOrder(MSBFIRST);
     SPI.setClockDivider(SPI_CLOCK_DIV128); 
