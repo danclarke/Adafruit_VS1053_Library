@@ -1,4 +1,10 @@
-/*************************************************** 
+/*!
+ * @file Adafruit_VS1053.cpp
+ *
+ * @mainpage Adafruit VS1053 Library
+ *
+ * @section intro_sec Introduction
+ *
   This is a library for the Adafruit VS1053 Codec Breakout
 
   Designed specifically to work with the Adafruit VS1053 Codec Breakout 
@@ -8,12 +14,16 @@
   please support Adafruit and open-source hardware by purchasing 
   products from Adafruit!
 
-  Written by Limor Fried/Ladyada for Adafruit Industries.  
+ * @section author Author
+ *
+ * Written by Limor Fried/Ladyada for Adafruit Industries.
+ *
+ * @section license License
+ *
   BSD license, all text above must be included in any redistribution
- ****************************************************/
+ */
 
 #include <Adafruit_VS1053.h>
-#include <SD.h>
 
 #if defined(ARDUINO_STM32_FEATHER)
    #define digitalPinToInterrupt(x) x
@@ -25,7 +35,7 @@ static Adafruit_VS1053_FilePlayer *myself;
   #define _BV(x) (1<<(x))
 #endif
 
-#if defined(__AVR__)
+#if defined(ARDUINO_ARCH_AVR)
 SIGNAL(TIMER0_COMPA_vect) {
   myself->feedBuffer();
 }
@@ -47,6 +57,9 @@ static void IRAM_ATTR feeder(void) {
 	xSemaphoreGiveFromISR(bufferSemaphore, NULL);
 }
 #else
+#if defined(ESP8266)
+ICACHE_RAM_ATTR
+#endif
 static void feeder(void) {
   myself->feedBuffer();
 }
@@ -60,7 +73,7 @@ boolean Adafruit_VS1053_FilePlayer::useInterrupt(uint8_t type) {
   myself = this;  // oy vey
     
   if (type == VS1053_FILEPLAYER_TIMER0_INT) {
-#if defined(__AVR__)
+#if defined(ARDUINO_ARCH_AVR)
     OCR0A = 0xAF;
     TIMSK0 |= _BV(OCIE0A);
     return true;
@@ -173,10 +186,8 @@ void Adafruit_VS1053_FilePlayer::stopPlaying(void) {
 }
 
 void Adafruit_VS1053_FilePlayer::pausePlaying(boolean pause) {
-  if (pause) 
-    playingMusic = false;
-  else {
-    playingMusic = true;
+  playingMusic = (!pause && currentTrack);
+  if (playingMusic) {
     feedBuffer();
   }
 }
@@ -189,10 +200,54 @@ boolean Adafruit_VS1053_FilePlayer::stopped(void) {
   return (!playingMusic && !currentTrack);
 }
 
+// Just checks to see if the name ends in ".mp3"
+boolean Adafruit_VS1053_FilePlayer::isMP3File(const char *fileName) {
+  return (strlen(fileName) > 4) &&
+         !strcasecmp(fileName + strlen(fileName) - 4, ".mp3");
+}
 
+unsigned long Adafruit_VS1053_FilePlayer::mp3_ID3Jumper(File mp3) {
+
+  char tag[4];
+  uint32_t start;
+  unsigned long current;
+
+  start = 0;
+  if (mp3) {
+    current = mp3.position();
+    if (mp3.seek(0)) {
+      if (mp3.read((uint8_t *)tag, 3)) {
+        tag[3] = '\0';
+        if (!strcmp(tag, "ID3")) {
+          if (mp3.seek(6)) {
+            start = 0ul;
+            for (byte i = 0; i < 4; i++) {
+              start <<= 7;
+              start |= (0x7F & mp3.read());
+            }
+          } else {
+            // Serial.println("Second seek failed?");
+          }
+        } else {
+          // Serial.println("It wasn't the damn TAG.");
+        }
+      } else {
+        // Serial.println("Read for the tag failed");
+      }
+    } else {
+      // Serial.println("Seek failed? How can seek fail?");
+    }
+    mp3.seek(current); // Put you things away like you found 'em.
+  } else {
+    // Serial.println("They handed us a NULL file!");
+  }
+  // Serial.print("Jumper returning: "); Serial.println(start);
+  return start;
+}
 boolean Adafruit_VS1053_FilePlayer::startPlayingFile(const char *trackname) {
   // reset playback
-  sciWrite(VS1053_REG_MODE, VS1053_MODE_SM_LINE1 | VS1053_MODE_SM_SDINEW);
+  sciWrite(VS1053_REG_MODE, VS1053_MODE_SM_LINE1 | VS1053_MODE_SM_SDINEW |
+                                VS1053_MODE_SM_LAYER12);
   // resync
   sciWrite(VS1053_REG_WRAMADDR, 0x1e29);
   sciWrite(VS1053_REG_WRAM, 0);
@@ -200,6 +255,12 @@ boolean Adafruit_VS1053_FilePlayer::startPlayingFile(const char *trackname) {
   currentTrack = SD.open(trackname);
   if (!currentTrack) {
     return false;
+  }
+
+  // We know we have a valid file. Check if .mp3
+  // If so, check for ID3 tag and jump it if present.
+  if (isMP3File(trackname)) {
+    currentTrack.seek(mp3_ID3Jumper(currentTrack));
   }
 
   // don't let the IRQ get triggered by accident here
@@ -214,7 +275,7 @@ boolean Adafruit_VS1053_FilePlayer::startPlayingFile(const char *trackname) {
   // wait till its ready for data
   while (! readyForData() ) {
 #if defined(ESP8266)
-	yield();
+    ESP.wdtFeed();
 #endif
   }
 
@@ -375,9 +436,11 @@ uint16_t Adafruit_VS1053::loadPlugin(char *plugname) {
 	return 0xFFFF;
     }
 
-    len = plugin.read();    len <<= 8;
+    len = plugin.read();
+    len <<= 8;
     len |= plugin.read() & ~1;
-    addr = plugin.read();    addr <<= 8;
+    addr = plugin.read();
+    addr <<= 8;
     addr |= plugin.read();
     //Serial.print("len: "); Serial.print(len); 
     //Serial.print(" addr: $"); Serial.println(addr, HEX);
@@ -393,7 +456,8 @@ uint16_t Adafruit_VS1053::loadPlugin(char *plugname) {
     // write data
     do {
       uint16_t data;
-      data = plugin.read();    data <<= 8;
+      data = plugin.read();
+      data <<= 8;
       data |= plugin.read();
       sciWrite(VS1053_REG_WRAM, data);
     } while ((len -=2));
@@ -411,17 +475,19 @@ boolean Adafruit_VS1053::readyForData(void) {
 }
 
 void Adafruit_VS1053::playData(uint8_t *buffer, uint8_t buffsiz) {
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
+#endif
   digitalWrite(_dcs, LOW);
   
   spiwrite(buffer, buffsiz);
 
   digitalWrite(_dcs, HIGH);
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.endTransaction();
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.endTransaction();
+#endif
 }
 
 void Adafruit_VS1053::setVolume(uint8_t left, uint8_t right) {
@@ -492,9 +558,11 @@ uint8_t Adafruit_VS1053::begin(void) {
 #else
     SPI.begin();
 #endif
+#ifndef SPI_HAS_TRANSACTION
     SPI.setDataMode(SPI_MODE0);
     SPI.setBitOrder(MSBFIRST);
     SPI.setClockDivider(SPI_CLOCK_DIV128); 
+#endif
   }
 
   reset();
@@ -503,10 +571,14 @@ uint8_t Adafruit_VS1053::begin(void) {
 }
 
 void Adafruit_VS1053::dumpRegs(void) {
-  Serial.print("Mode = 0x"); Serial.println(sciRead(VS1053_REG_MODE), HEX);
-  Serial.print("Stat = 0x"); Serial.println(sciRead(VS1053_REG_STATUS), HEX);
-  Serial.print("ClkF = 0x"); Serial.println(sciRead(VS1053_REG_CLOCKF), HEX);
-  Serial.print("Vol. = 0x"); Serial.println(sciRead(VS1053_REG_VOLUME), HEX);
+  Serial.print("Mode = 0x");
+  Serial.println(sciRead(VS1053_REG_MODE), HEX);
+  Serial.print("Stat = 0x");
+  Serial.println(sciRead(VS1053_REG_STATUS), HEX);
+  Serial.print("ClkF = 0x");
+  Serial.println(sciRead(VS1053_REG_CLOCKF), HEX);
+  Serial.print("Vol. = 0x");
+  Serial.println(sciRead(VS1053_REG_VOLUME), HEX);
 }
 
 
@@ -521,12 +593,16 @@ uint16_t Adafruit_VS1053::recordedReadWord(void) {
 
 boolean Adafruit_VS1053::prepareRecordOgg(char *plugname) {
   sciWrite(VS1053_REG_CLOCKF, 0xC000);  // set max clock
-  delay(1);    while (! readyForData() );
+  delay(1);
+  while (!readyForData())
+    ;
 
   sciWrite(VS1053_REG_BASS, 0);  // clear Bass
   
   softReset();
-  delay(1);    while (! readyForData() );
+  delay(1);
+  while (!readyForData())
+    ;
 
   sciWrite(VS1053_SCI_AIADDR, 0);
   // disable all interrupts except SCI
@@ -534,9 +610,12 @@ boolean Adafruit_VS1053::prepareRecordOgg(char *plugname) {
   sciWrite(VS1053_REG_WRAM, 0x02);
 
   int pluginStartAddr = loadPlugin(plugname);
-  if (pluginStartAddr == 0xFFFF) return false;
-  Serial.print("Plugin at $"); Serial.println(pluginStartAddr, HEX);
-  if (pluginStartAddr != 0x34) return false;
+  if (pluginStartAddr == 0xFFFF)
+    return false;
+  Serial.print("Plugin at $");
+  Serial.println(pluginStartAddr, HEX);
+  if (pluginStartAddr != 0x34)
+    return false;
 
   return true;
 }
@@ -563,11 +642,14 @@ void Adafruit_VS1053::startRecordOgg(boolean mic) {
   sciWrite(VS1053_SCI_AICTRL3, 0);
   
   sciWrite(VS1053_SCI_AIADDR, 0x34);
-  delay(1);    while (! readyForData() );
+  delay(1);
+  while (!readyForData())
+    ;
 }
 
 void Adafruit_VS1053::GPIO_pinMode(uint8_t i, uint8_t dir) {
-  if (i > 7) return;
+  if (i > 7)
+    return;
 
   sciWrite(VS1053_REG_WRAMADDR, VS1053_GPIO_DDR);
   uint16_t ddr = sciRead(VS1053_REG_WRAM);
@@ -588,7 +670,8 @@ void Adafruit_VS1053::GPIO_digitalWrite(uint8_t val) {
 }
 
 void Adafruit_VS1053::GPIO_digitalWrite(uint8_t i, uint8_t val) {
-  if (i > 7) return;
+  if (i > 7)
+    return;
 
   sciWrite(VS1053_REG_WRAMADDR, VS1053_GPIO_ODATA);
   uint16_t pins = sciRead(VS1053_REG_WRAM);
@@ -608,20 +691,23 @@ uint16_t Adafruit_VS1053::GPIO_digitalRead(void) {
 }
 
 boolean Adafruit_VS1053::GPIO_digitalRead(uint8_t i) {
-  if (i > 7) return 0;
+  if (i > 7)
+    return 0;
 
   sciWrite(VS1053_REG_WRAMADDR, VS1053_GPIO_IDATA);
   uint16_t val = sciRead(VS1053_REG_WRAM);
-  if (val & _BV(i)) return true;
+  if (val & _BV(i))
+    return true;
   return false;
 }
 
 uint16_t Adafruit_VS1053::sciRead(uint8_t addr) {
   uint16_t data;
 
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.beginTransaction(VS1053_CONTROL_SPI_SETTING);
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.beginTransaction(VS1053_CONTROL_SPI_SETTING);
+#endif
   digitalWrite(_cs, LOW);  
   spiwrite(VS1053_SCI_READ);
   spiwrite(addr);
@@ -630,27 +716,30 @@ uint16_t Adafruit_VS1053::sciRead(uint8_t addr) {
   data <<= 8;
   data |= spiread();
   digitalWrite(_cs, HIGH);
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.endTransaction();
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.endTransaction();
+#endif
 
   return data;
 }
 
 
 void Adafruit_VS1053::sciWrite(uint8_t addr, uint16_t data) {
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.beginTransaction(VS1053_CONTROL_SPI_SETTING);
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.beginTransaction(VS1053_CONTROL_SPI_SETTING);
+#endif
   digitalWrite(_cs, LOW);  
   spiwrite(VS1053_SCI_WRITE);
   spiwrite(addr);
   spiwrite(data >> 8);
   spiwrite(data & 0xFF);
   digitalWrite(_cs, HIGH);
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.endTransaction();
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.endTransaction();
+#endif
 }
 
 
@@ -731,12 +820,14 @@ void Adafruit_VS1053::sineTest(uint8_t n, uint16_t ms) {
   mode |= 0x0020;
   sciWrite(VS1053_REG_MODE, mode);
 
-  while (!digitalRead(_dreq));
+  while (!digitalRead(_dreq))
+    ;
 	 //  delay(10);
 
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
+#endif
   digitalWrite(_dcs, LOW);  
   spiwrite(0x53);
   spiwrite(0xEF);
@@ -747,15 +838,17 @@ void Adafruit_VS1053::sineTest(uint8_t n, uint16_t ms) {
   spiwrite(0x00);
   spiwrite(0x00);
   digitalWrite(_dcs, HIGH);  
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.endTransaction();
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.endTransaction();
+#endif
   
   delay(ms);
 
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.beginTransaction(VS1053_DATA_SPI_SETTING);
+#endif
   digitalWrite(_dcs, LOW);  
   spiwrite(0x45);
   spiwrite(0x78);
@@ -766,7 +859,8 @@ void Adafruit_VS1053::sineTest(uint8_t n, uint16_t ms) {
   spiwrite(0x00);
   spiwrite(0x00);
   digitalWrite(_dcs, HIGH);  
-  #ifdef SPI_HAS_TRANSACTION
-  if (useHardwareSPI) SPI.endTransaction();
-  #endif
+#ifdef SPI_HAS_TRANSACTION
+  if (useHardwareSPI)
+    SPI.endTransaction();
+#endif
 }
