@@ -301,7 +301,7 @@ private:
 class Adafruit_VS1053_FilePlayer : public Adafruit_VS1053 {
  public:
   /*!
-   * @brief Software SPI constructor. Uses Software SPI, so you must specify all
+   * @brief Software (hardware for ESP32) SPI constructor. Uses Software SPI, so you must specify all
    * SPI pins
    * @param mosi MOSI (Microcontroller Out Serial In) pin
    * @param miso MISO (Microcontroller In Serial Out) pin
