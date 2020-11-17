@@ -114,7 +114,7 @@ typedef volatile RwReg PortReg;
 class Adafruit_VS1053 {
  public:
   /*!
-   * @brief Software SPI constructor - must specify all pins
+   * @brief Software (hardware for ESP32) SPI constructor - must specify all pins
    * @param mosi MOSI (Microcontroller Out Serial In) pin
    * @param miso MISO (Microcontroller In Serial Out) pin
    * @param clk Clock pin
